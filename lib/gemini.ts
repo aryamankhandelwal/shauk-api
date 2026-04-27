@@ -114,8 +114,9 @@ async function executeSearchQueries(
 }
 
 /**
- * Heuristic: return true only for URLs that look like individual product pages.
- * Filters out homepages ("/"), category pages ("/lehenga/"), and brand root pages.
+ * Reject only true homepages and bare root paths.
+ * Everything else (category pages, product pages) is allowed through —
+ * image quality is handled in the screenshot route instead.
  */
 function isProductPageUrl(rawUrl: string): boolean {
   let url: URL;
@@ -124,19 +125,9 @@ function isProductPageUrl(rawUrl: string): boolean {
   } catch {
     return false;
   }
-
-  const path = url.pathname.replace(/\/$/, ""); // strip trailing slash
-  const segments = path.split("/").filter(Boolean);
-
-  // Reject root and single-segment category pages
-  if (segments.length < 2) return false;
-
-  // The last segment should look like a product slug (has a number, or is long enough)
-  const lastSegment = segments[segments.length - 1];
-  const hasNumber = /\d/.test(lastSegment);
-  const isLongSlug = lastSegment.length >= 10;
-
-  return hasNumber || isLongSlug;
+  const path = url.pathname.replace(/\/$/, "");
+  // Only reject the bare root
+  return path.length > 0;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
