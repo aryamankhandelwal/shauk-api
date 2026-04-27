@@ -3,8 +3,11 @@ import type { ProductResult } from "@/lib/gemini";
 
 const TTL_HOURS = 24;
 
+// Bump this version string to invalidate all cached results globally.
+const CACHE_VERSION = "v2";
+
 function makeCacheKey(occasion: string, gender?: string): string {
-  return `${occasion.toLowerCase().trim()}__${(gender ?? "unknown").toLowerCase()}`;
+  return `${CACHE_VERSION}__${occasion.toLowerCase().trim()}__${(gender ?? "unknown").toLowerCase()}`;
 }
 
 export async function getCachedResults(

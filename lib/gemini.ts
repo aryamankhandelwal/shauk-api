@@ -44,10 +44,13 @@ Given this occasion: "${occasion}"
 Gender: ${user.gender ?? "unspecified"}
 Clothing types to focus on: ${clothingTypes}
 
-Generate exactly 3 Google search queries that would find specific product pages on Indian fashion retailer websites. Each query should:
-- Include the occasion context
-- Target specific product types (not generic)
-- Be optimized for Google search (concise, keyword-rich)
+Generate exactly 3 Google search queries that would find INDIVIDUAL PRODUCT PAGES (not brand homepages or category listings) on Indian fashion retailer websites like Ajio, Nykaa Fashion, Myntra, Pernia's Pop-Up Shop, Aza Fashions, Raw Mango, Anita Dongre, etc.
+
+Each query should:
+- Include the occasion context and a specific garment type
+- Add "buy online" or a site: filter to target product pages
+- Be optimised for Google search (concise, keyword-rich)
+- NOT target brand homepages or generic category pages
 
 Respond with ONLY the 3 queries, one per line. No numbering, no bullets, no extra text.`;
 
@@ -83,19 +86,57 @@ async function executeSearchQueries(
     }
   }
 
-  // Deduplicate by domain for variety across brands
+  // Deduplicate by domain for variety across brands, keep only product-page URLs
   const seen = new Set<string>();
   const results: ProductResult[] = [];
 
   for (const item of allItems) {
-    if (!seen.has(item.displayUrl)) {
+    if (!seen.has(item.displayUrl) && isProductPageUrl(item.url)) {
       seen.add(item.displayUrl);
       results.push({ uri: item.url, domain: item.displayUrl, title: item.title });
     }
     if (results.length >= 6) break;
   }
 
+  // If strict filtering left nothing, fall back to all unique-domain results
+  if (results.length === 0) {
+    const fallbackSeen = new Set<string>();
+    for (const item of allItems) {
+      if (!fallbackSeen.has(item.displayUrl)) {
+        fallbackSeen.add(item.displayUrl);
+        results.push({ uri: item.url, domain: item.displayUrl, title: item.title });
+      }
+      if (results.length >= 6) break;
+    }
+  }
+
   return results;
+}
+
+/**
+ * Heuristic: return true only for URLs that look like individual product pages.
+ * Filters out homepages ("/"), category pages ("/lehenga/"), and brand root pages.
+ */
+function isProductPageUrl(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  const path = url.pathname.replace(/\/$/, ""); // strip trailing slash
+  const segments = path.split("/").filter(Boolean);
+
+  // Reject root and single-segment category pages
+  if (segments.length < 2) return false;
+
+  // The last segment should look like a product slug (has a number, or is long enough)
+  const lastSegment = segments[segments.length - 1];
+  const hasNumber = /\d/.test(lastSegment);
+  const isLongSlug = lastSegment.length >= 10;
+
+  return hasNumber || isLongSlug;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
