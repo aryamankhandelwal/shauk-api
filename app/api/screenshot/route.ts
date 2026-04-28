@@ -1,9 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const maxDuration = 10;
 
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
+// ─── Gemini Vision image classification ──────────────────────────────────────
+
+interface ClassifyResult {
+  isProduct: boolean;
+  confidence: number;
+}
+
+/**
+ * Classify image using Gemini Vision to verify it is a product/clothing photo.
+ * Returns { isProduct, confidence }. Never throws — returns { isProduct: true }
+ * if Gemini is unavailable, so the pipeline is never blocked.
+ */
+async function classifyImage(imageBase64: string): Promise<ClassifyResult> {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (!geminiKey) return { isProduct: true, confidence: 0.5 };
+
+  try {
+    const genAI = new GoogleGenerativeAI(geminiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
+
+    const result = await Promise.race([
+      model.generateContent([
+        {
+          inlineData: {
+            mimeType: "image/jpeg",
+            data: imageBase64,
+          },
+        },
+        "Is this image a product photo of a clothing or fashion item, or a model wearing clothing? Answer ONLY 'yes' or 'no'.",
+      ]),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini timeout")), 4000)
+      ),
+    ]);
+
+    const text = result.response.text().trim().toLowerCase();
+    const isProduct = text.startsWith("yes");
+    return { isProduct, confidence: isProduct ? 0.8 : 0.2 };
+  } catch {
+    // Gemini unavailable or rate-limited — pass through
+    return { isProduct: true, confidence: 0.5 };
+  }
+}
 
 // Fetch the best product image from a page and return it as base64.
 // Priority: schema.org Product JSON-LD → og:image → twitter:image → body <img> tags
@@ -27,9 +72,13 @@ export async function POST(req: NextRequest) {
     const html = await htmlRes.text();
     let candidates = extractProductImageCandidates(html);
 
-    // If no Product JSON-LD found, this is likely a category/listing page.
-    // Try to extract a product link, follow it, and get the image from the PDP.
-    if (!hasProductSchema(html)) {
+    // Detect page type. Trust the URL itself first — many Shopify/JS-rendered PDPs
+    // lack HTML signals (no JSON-LD, no static "Add to Cart" text) but have
+    // clear PDP URL patterns like /products/, /p/, or SKU slugs.
+    let resolvedUrl: string | null = null;
+    const urlIsPdp = isProductPageUrl(url);
+    const pageType = urlIsPdp ? 'pdp' : detectPageType(html);
+    if (pageType !== 'pdp') {
       const productUrl = extractFirstProductLink(html, url);
       if (productUrl) {
         try {
@@ -42,6 +91,7 @@ export async function POST(req: NextRequest) {
           const pdpCandidates = extractProductImageCandidates(pdpHtml);
           if (pdpCandidates.length > 0) {
             candidates = pdpCandidates; // prefer PDP images over category page images
+            resolvedUrl = productUrl;   // track that we followed a PDP link
           }
         } catch {
           // PDP fetch failed — fall back to original candidates
@@ -69,7 +119,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Try top candidates in score order until one passes validation
-    for (const candidate of candidates.slice(0, 3)) {
+    for (const candidate of candidates.slice(0, 5)) {
       try {
         const imgRes = await fetch(candidate.url, {
           signal: AbortSignal.timeout(3000),
@@ -91,7 +141,17 @@ export async function POST(req: NextRequest) {
         }
 
         const base64 = Buffer.from(buffer).toString("base64");
-        return NextResponse.json({ ok: true, image_base64: base64 });
+
+        // Semantic validation: is this actually a product/clothing image?
+        const classification = await classifyImage(base64);
+        if (!classification.isProduct) continue; // try next candidate
+
+        return NextResponse.json({
+          ok: true,
+          image_base64: base64,
+          confidence: classification.confidence,
+          ...(resolvedUrl ? { resolved_url: resolvedUrl } : {}),
+        });
       } catch {
         // timeout or fetch error — try next candidate
         continue;
@@ -302,6 +362,63 @@ function getImageDimensions(
   return null;
 }
 
+// ─── URL-based PDP detection ────────────────────────────────────────────────
+
+/**
+ * Quick URL-only check: does this URL look like a product detail page?
+ * Used to short-circuit HTML analysis for JS-rendered sites (Shopify, etc.)
+ * that won't have JSON-LD or Add-to-Cart text in static HTML.
+ */
+function isProductPageUrl(rawUrl: string): boolean {
+  let url: URL;
+  try { url = new URL(rawUrl); } catch { return false; }
+  const path = url.pathname.toLowerCase();
+
+  // Clear PDP signals
+  if (/\/(products?|p|dp|buy|item)\//.test(path)) return true;
+  if (/\/[a-z0-9-]+-\d{5,}(\/|$)/.test(path)) return true; // slug-12345+ (not years)
+  if (/[A-Z]{2,5}\d{3,}/.test(url.pathname)) return true;   // SKU like KPMC02782
+
+  // Clear category signals
+  if (/\/(collections?|categories?|c|s|shop|browse)(\/|$)/.test(path)) return false;
+  if (/^\/(men|women)\/?$/.test(path)) return false;
+  if (/^\/(men|women)\/[a-z-]+\/?$/.test(path) && path.split('/').filter(Boolean).length <= 2) return false;
+
+  return false; // unknown — let HTML signals decide
+}
+
+// ─── Page type detection ────────────────────────────────────────────────────
+
+/**
+ * Detect whether a page is a product detail page (PDP) or a category/listing page.
+ * Uses multiple signals beyond just JSON-LD schema.
+ */
+function detectPageType(html: string): 'pdp' | 'category' | 'unknown' {
+  // Strong PDP signal: Product JSON-LD
+  if (hasProductSchema(html)) return 'pdp';
+
+  // Strong PDP signal: Add to Cart / Buy Now button text
+  if (/add\s+to\s+(cart|bag|basket)|buy\s+now/i.test(html)) return 'pdp';
+
+  // Strong category signal: multiple product links (listing page grid)
+  const pdpLinkCount = (
+    html.match(/<a[^>]+href=["'][^"']*\/(products?|p|dp)\//gi) || []
+  ).length;
+  if (pdpLinkCount >= 4) return 'category';
+
+  // Category signal: title starts with listing keywords (not just contains — product pages
+  // often include collection names like "Rewild 2026 Collection" in their titles)
+  const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  if (titleMatch) {
+    const title = titleMatch[1].toLowerCase().trim();
+    if (/^(shop all|browse|all products|collections?:)/.test(title)) {
+      return 'category';
+    }
+  }
+
+  return 'unknown';
+}
+
 // ─── Category → PDP extraction ──────────────────────────────────────────────
 
 /** Check if the page has a schema.org Product JSON-LD block */
@@ -355,7 +472,7 @@ function extractFirstProductLink(html: string, baseUrl: string): string | null {
     /\/buy\//i,
     /\/item\//i,
     /\/dp\//i,                       // Amazon-style
-    /\/[a-z0-9-]+-\d{4,}/i,         // slug ending with numeric product ID (e.g. /blue-kurta-12345)
+    /\/[a-z0-9-]+-\d{5,}/i,         // slug ending with numeric product ID (5+ digits, avoids year matches)
     /[A-Z]{2,5}\d{3,}/,             // alphanumeric SKU like KPMC02782 (Manyavar, etc.)
     /\/[a-z0-9-]+-[a-z]{1,5}\d{3,}/i, // slug-kpmc02782 style IDs
   ];
@@ -370,6 +487,9 @@ function extractFirstProductLink(html: string, baseUrl: string): string | null {
     /\/filter/i,
     /\/sort/i,
     /\/page\b/i,
+    /\/collections?(\/|$)/i,  // never follow collection/category links
+    /\/categor/i,
+    /\/blog/i,
   ];
 
   const seen = new Set<string>();
