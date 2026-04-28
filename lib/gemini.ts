@@ -98,11 +98,12 @@ async function executeSearchQueries(
     if (results.length >= 6) break;
   }
 
-  // If strict filtering left nothing, fall back to all unique-domain results
+  // If strict filtering left nothing, fall back to category/product pages
+  // (reject only homepages, search, login, cart — not category listings)
   if (results.length === 0) {
     const fallbackSeen = new Set<string>();
     for (const item of allItems) {
-      if (!fallbackSeen.has(item.displayUrl)) {
+      if (!fallbackSeen.has(item.displayUrl) && isFashionPageUrl(item.url)) {
         fallbackSeen.add(item.displayUrl);
         results.push({ uri: item.url, domain: item.displayUrl, title: item.title });
       }
@@ -114,9 +115,8 @@ async function executeSearchQueries(
 }
 
 /**
- * Reject only true homepages and bare root paths.
- * Everything else (category pages, product pages) is allowed through —
- * image quality is handled in the screenshot route instead.
+ * Reject homepages AND category/listing pages.
+ * We want individual product detail pages (PDPs) only.
  */
 function isProductPageUrl(rawUrl: string): boolean {
   let url: URL;
@@ -125,9 +125,78 @@ function isProductPageUrl(rawUrl: string): boolean {
   } catch {
     return false;
   }
-  const path = url.pathname.replace(/\/$/, "");
-  // Only reject the bare root
-  return path.length > 0;
+  const path = url.pathname.replace(/\/$/, "").toLowerCase();
+
+  // Reject bare root
+  if (path.length === 0) return false;
+
+  // Reject common category / listing / search patterns
+  const categoryPatterns = [
+    /^\/collections(\/|$)/,
+    /^\/category(\/|$)/,
+    /^\/categories(\/|$)/,
+    /^\/c\//,
+    /^\/s\//,
+    /^\/shop(\/|$)/,
+    /^\/search/,
+    /^\/browse/,
+    /^\/men\/?$/,              // /men or /men/
+    /^\/men\/[a-z-]+\/?$/,     // /men/kurtas (but NOT /men/kurtas/product-slug)
+    /^\/women\/?$/,            // /women or /women/
+    /^\/women\/[a-z-]+\/?$/,   // /women/lehengas (but NOT /women/lehengas/product-slug)
+    /^\/sale(\/|$)/,
+    /^\/new-arrivals/,
+    /^\/best-sellers/,
+  ];
+
+  for (const pattern of categoryPatterns) {
+    if (pattern.test(path)) return false;
+  }
+
+  // Reject if path has only 1 segment and looks like a category (e.g. /kurtas, /lehengas)
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length === 1 && !/\d/.test(segments[0])) {
+    return false; // single-word paths without numbers are almost always categories
+  }
+
+  return true;
+}
+
+/**
+ * Relaxed filter for the fallback path — allows category/listing pages through
+ * but still rejects homepages, search pages, and non-fashion content.
+ */
+function isFashionPageUrl(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  const path = url.pathname.replace(/\/$/, "").toLowerCase();
+
+  // Reject bare root (homepages)
+  if (path.length === 0) return false;
+
+  const rejectPatterns = [
+    /^\/search/,
+    /^\/login/,
+    /^\/cart/,
+    /^\/account/,
+    /^\/about/,
+    /^\/contact/,
+    /^\/faq/,
+    /^\/help/,
+    /^\/blog/,
+    /^\/privacy/,
+    /^\/terms/,
+  ];
+
+  for (const p of rejectPatterns) {
+    if (p.test(path)) return false;
+  }
+
+  return true;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

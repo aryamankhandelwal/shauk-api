@@ -25,7 +25,41 @@ export async function POST(req: NextRequest) {
     });
 
     const html = await htmlRes.text();
-    const candidates = extractProductImageCandidates(html);
+    let candidates = extractProductImageCandidates(html);
+
+    // If no Product JSON-LD found, this is likely a category/listing page.
+    // Try to extract a product link, follow it, and get the image from the PDP.
+    if (!hasProductSchema(html)) {
+      const productUrl = extractFirstProductLink(html, url);
+      if (productUrl) {
+        try {
+          const pdpRes = await fetch(productUrl, {
+            redirect: "follow",
+            headers: { "User-Agent": MOBILE_UA, Accept: "text/html" },
+            signal: AbortSignal.timeout(4000),
+          });
+          const pdpHtml = await pdpRes.text();
+          const pdpCandidates = extractProductImageCandidates(pdpHtml);
+          if (pdpCandidates.length > 0) {
+            candidates = pdpCandidates; // prefer PDP images over category page images
+          }
+        } catch {
+          // PDP fetch failed — fall back to original candidates
+        }
+      } else {
+        // Category page with no extractable PDP link.
+        // Penalize og:image (typically a promotional banner) so body product
+        // grid images outrank it.
+        candidates = candidates
+          .map((c) => {
+            if (c.score >= 50 && !/\/(product|catalog|media\/catalog)\//.test(c.url.toLowerCase())) {
+              return { ...c, score: c.score - 40 };
+            }
+            return c;
+          })
+          .sort((a, b) => b.score - a.score);
+      }
+    }
 
     if (candidates.length === 0) {
       return NextResponse.json(
@@ -262,6 +296,121 @@ function getImageDimensions(
         const height = (bytes[28] | (bytes[29] << 8)) & 0x3fff;
         return { width, height };
       }
+    }
+  }
+
+  return null;
+}
+
+// ─── Category → PDP extraction ──────────────────────────────────────────────
+
+/** Check if the page has a schema.org Product JSON-LD block */
+function hasProductSchema(html: string): boolean {
+  const scriptPattern =
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptPattern.exec(html)) !== null) {
+    try {
+      const json = JSON.parse(match[1]);
+      if (containsProductType(json)) return true;
+    } catch {
+      // skip malformed JSON
+    }
+  }
+  return false;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function containsProductType(obj: any): boolean {
+  if (!obj) return false;
+  if (Array.isArray(obj)) return obj.some(containsProductType);
+  if (Array.isArray(obj["@graph"])) return obj["@graph"].some(containsProductType);
+  const type: string = obj["@type"] ?? "";
+  return type === "Product" || type.includes("Product");
+}
+
+/**
+ * Extract the first individual product link from a category/listing page.
+ * Two-pass approach: first try explicit PDP URL patterns, then use a
+ * depth-relative heuristic (links deeper than the current page are likely PDPs).
+ */
+function extractFirstProductLink(html: string, baseUrl: string): string | null {
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return null;
+  }
+
+  const baseSegments = base.pathname.replace(/\/$/, "").split("/").filter(Boolean).length;
+
+  // Match <a> tags with href attributes
+  const linkPattern = /<a\s[^>]*href=["']([^"'#]+)["'][^>]*>/gi;
+  let match: RegExpExecArray | null;
+
+  // PDP path patterns — these indicate individual product pages
+  const pdpPatterns = [
+    /\/products?\//i,
+    /\/p\//i,
+    /\/buy\//i,
+    /\/item\//i,
+    /\/dp\//i,                       // Amazon-style
+    /\/[a-z0-9-]+-\d{4,}/i,         // slug ending with numeric product ID (e.g. /blue-kurta-12345)
+    /[A-Z]{2,5}\d{3,}/,             // alphanumeric SKU like KPMC02782 (Manyavar, etc.)
+    /\/[a-z0-9-]+-[a-z]{1,5}\d{3,}/i, // slug-kpmc02782 style IDs
+  ];
+
+  // Paths to skip even if they match
+  const skipPatterns = [
+    /\/cart/i,
+    /\/account/i,
+    /\/login/i,
+    /\/wishlist/i,
+    /\/review/i,
+    /\/filter/i,
+    /\/sort/i,
+    /\/page\b/i,
+  ];
+
+  const seen = new Set<string>();
+  const candidateLinks: string[] = [];
+
+  while ((match = linkPattern.exec(html)) !== null) {
+    let href = match[1];
+
+    // Resolve relative URLs
+    try {
+      const resolved = new URL(href, base.origin);
+      // Only follow links on the same domain
+      if (resolved.hostname !== base.hostname) continue;
+      href = resolved.href;
+    } catch {
+      continue;
+    }
+
+    if (seen.has(href)) continue;
+    seen.add(href);
+
+    const path = new URL(href).pathname.toLowerCase();
+
+    // Skip non-product paths
+    if (skipPatterns.some((p) => p.test(path))) continue;
+
+    // Pass 1: explicit PDP pattern match — return immediately
+    if (pdpPatterns.some((p) => p.test(path))) {
+      return href;
+    }
+
+    candidateLinks.push(href);
+  }
+
+  // Pass 2: depth heuristic — links deeper than the current category page
+  // (e.g. /men/kurtas/product-slug has 3 segments vs /men/kurtas has 2)
+  for (const href of candidateLinks) {
+    const path = new URL(href).pathname.replace(/\/$/, "");
+    const segments = path.split("/").filter(Boolean).length;
+    if (segments > baseSegments && segments >= 3) {
+      return href;
     }
   }
 
