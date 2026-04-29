@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     const htmlRes = await fetch(url, {
       redirect: "follow",
       headers: { "User-Agent": MOBILE_UA, Accept: "text/html" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(3000),
     });
 
     const html = await htmlRes.text();
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
           const pdpRes = await fetch(productUrl, {
             redirect: "follow",
             headers: { "User-Agent": MOBILE_UA, Accept: "text/html" },
-            signal: AbortSignal.timeout(4000),
+            signal: AbortSignal.timeout(3000),
           });
           const pdpHtml = await pdpRes.text();
           const pdpCandidates = extractProductImageCandidates(pdpHtml);
@@ -119,10 +119,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Try top candidates in score order until one passes validation
-    for (const candidate of candidates.slice(0, 5)) {
+    for (const candidate of candidates.slice(0, 3)) {
       try {
         const imgRes = await fetch(candidate.url, {
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(2000),
           headers: { "User-Agent": MOBILE_UA, Referer: url },
         });
 
@@ -142,14 +142,9 @@ export async function POST(req: NextRequest) {
 
         const base64 = Buffer.from(buffer).toString("base64");
 
-        // Semantic validation: is this actually a product/clothing image?
-        const classification = await classifyImage(base64);
-        if (!classification.isProduct) continue; // try next candidate
-
         return NextResponse.json({
           ok: true,
           image_base64: base64,
-          confidence: classification.confidence,
           ...(resolvedUrl ? { resolved_url: resolvedUrl } : {}),
         });
       } catch {
