@@ -1,8 +1,10 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { getCachedResults, setCachedResults } from "@/lib/cache";
 import { braveSearch, BraveSearchResult } from "@/lib/braveSearch";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+const genAI2 = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 export interface UserContext {
   gender?: string;
@@ -367,6 +369,92 @@ Return ONLY valid JSON — no markdown fences, no explanation:
   }
 }
 
+// ─── Gemini with Google Search grounding ─────────────────────────────────────
+
+async function findProductsWithGrounding(
+  occasion: string,
+  user: UserContext,
+): Promise<ProductResult[]> {
+  const genderLabel = user.gender === "male" ? "men's" : "women's";
+  const clothingTypes =
+    user.gender === "male"
+      ? "sherwanis, kurta sets, bandhgalas, Indo-western suits"
+      : "lehengas, anarkalis, sarees, sharara sets, salwar suits";
+
+  const prompt = `Find 15-20 INDIVIDUAL product pages (not category pages, not blogs, not "best stores" articles) for ${genderLabel} Indian occasion wear for a ${occasion}.
+
+Focus on: ${clothingTypes}
+Target retailers: Ajio, Myntra, Nykaa Fashion, Pernia's Pop-Up Shop, Aza Fashions, Manyavar, Anita Dongre, Raw Mango, Fabindia, House of Indya, Samyakk, Kalki Fashion, Mohey, etc.
+
+For each product found, return ONLY the direct product page URL (e.g. ajio.com/p/12345, not ajio.com/men/sherwanis).
+Do NOT include: blog posts, "best stores" articles, category/collection pages, or brand homepages.
+
+Return ONLY a JSON array of objects, no markdown fences, no explanation:
+[{"url":"https://...","title":"Product Name","domain":"retailer.com"}]`;
+
+  const response = await genAI2.models.generateContent({
+    model: "gemini-2.0-flash",
+    contents: prompt,
+    config: {
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  const results: ProductResult[] = [];
+  const seenUrls = new Set<string>();
+
+  // Extract URLs from grounding metadata (most reliable source)
+  const candidate = response.candidates?.[0];
+  const chunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+  for (const chunk of chunks) {
+    const uri = chunk.web?.uri;
+    const title = chunk.web?.title ?? "";
+    if (!uri || seenUrls.has(uri)) continue;
+
+    let domain: string;
+    try {
+      domain = new URL(uri).hostname.replace(/^www\./, "");
+    } catch {
+      continue;
+    }
+
+    // Apply same filters: PDP scoring, gender, editorial
+    if (isOppositeGender(title, uri, user.gender)) continue;
+    if (EDITORIAL_TITLE_PATTERN.test(title)) continue;
+    if (scoreUrlPdpConfidence(uri, domain) < -50) continue;
+
+    seenUrls.add(uri);
+    results.push({ uri, domain, title, thumbnail: null });
+  }
+
+  // Also try to parse the text response for additional URLs
+  try {
+    const text = response.text?.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+    if (text) {
+      const parsed = JSON.parse(text) as Array<{ url: string; title: string; domain: string }>;
+      for (const item of parsed) {
+        if (!item.url || seenUrls.has(item.url)) continue;
+        let domain: string;
+        try {
+          domain = new URL(item.url).hostname.replace(/^www\./, "");
+        } catch {
+          continue;
+        }
+        if (isOppositeGender(item.title ?? "", item.url, user.gender)) continue;
+        if (EDITORIAL_TITLE_PATTERN.test(item.title ?? "")) continue;
+        if (scoreUrlPdpConfidence(item.url, domain) < -50) continue;
+
+        seenUrls.add(item.url);
+        results.push({ uri: item.url, domain, title: item.title ?? "", thumbnail: null });
+      }
+    }
+  } catch {
+    // JSON parse failed — grounding metadata is the fallback
+  }
+
+  return results;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export async function findOccasionWearURLs(
@@ -378,25 +466,51 @@ export async function findOccasionWearURLs(
   const cached = await getCachedResults(occasion, user.gender);
   if (cached && cached.length > 0) return cached.slice(0, maxResults);
 
-  // 2. Generate search queries via Gemini (pure text, no grounding)
-  let queries: string[];
-  try {
-    queries = await generateSearchQueries(occasion, user);
-  } catch (err) {
-    console.error("[gemini] query generation failed:", err);
-    const genderWord = user.gender === "male" ? "men's" : "women's";
-    const clothingTypes =
-      user.gender === "male"
-        ? "sherwani kurta set"
-        : "lehenga saree anarkali";
-    queries = [`${genderWord} ${occasion} ${clothingTypes} buy online India`];
+  // 2. Run Gemini grounding + Brave Search in parallel for maximum coverage
+  const [groundedResults, braveResults] = await Promise.allSettled([
+    findProductsWithGrounding(occasion, user),
+    (async () => {
+      let queries: string[];
+      try {
+        queries = await generateSearchQueries(occasion, user);
+      } catch {
+        const genderWord = user.gender === "male" ? "men's" : "women's";
+        const clothingTypes =
+          user.gender === "male" ? "sherwani kurta set" : "lehenga saree anarkali";
+        queries = [`${genderWord} ${occasion} ${clothingTypes} buy online India`];
+      }
+      return executeSearchQueries(queries, maxResults, user.gender);
+    })(),
+  ]);
+
+  // 3. Merge: grounded results first (higher quality), then Brave results
+  const seenUrls = new Set<string>();
+  const merged: ProductResult[] = [];
+
+  const addResults = (results: ProductResult[]) => {
+    for (const r of results) {
+      if (seenUrls.has(r.uri)) continue;
+      seenUrls.add(r.uri);
+      merged.push(r);
+    }
+  };
+
+  if (groundedResults.status === "fulfilled") {
+    addResults(groundedResults.value);
+  } else {
+    console.error("[gemini] grounding failed:", groundedResults.reason);
   }
 
-  // 3. Execute queries via Brave Search (over-fetch for resilience)
-  const results = await executeSearchQueries(queries, maxResults, user.gender);
+  if (braveResults.status === "fulfilled") {
+    addResults(braveResults.value);
+  } else {
+    console.error("[brave] search failed:", braveResults.reason);
+  }
+
+  const final = merged.slice(0, maxResults);
 
   // 4. Cache result (fire-and-forget)
-  if (results.length > 0) setCachedResults(occasion, user.gender, results);
+  if (final.length > 0) setCachedResults(occasion, user.gender, final);
 
-  return results;
+  return final;
 }

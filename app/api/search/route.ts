@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findOccasionWearURLs } from "@/lib/gemini";
 
-export const maxDuration = 10;
+export const maxDuration = 25;
 
 export async function POST(req: NextRequest) {
   try {

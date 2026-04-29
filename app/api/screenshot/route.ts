@@ -92,6 +92,28 @@ function upscaleImageUrl(imgUrl: string): string {
   return imgUrl;
 }
 
+// ─── Image URL validation via HEAD request ───────────────────────────────────
+
+async function validateImageUrl(imgUrl: string): Promise<boolean> {
+  try {
+    const res = await fetch(imgUrl, {
+      method: "HEAD",
+      redirect: "follow",
+      headers: { "User-Agent": MOBILE_UA },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) return false;
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return false;
+    const contentLength = parseInt(res.headers.get("content-length") ?? "0");
+    // Images < 15KB are almost always logos, icons, or placeholders
+    if (contentLength > 0 && contentLength < 15000) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── SPA shell detection ──────────────────────────────────────────────────────
 
 function detectSpaShell(html: string): boolean {
@@ -189,6 +211,17 @@ function extractProductImageCandidates(html: string, isSpa: boolean): ImageCandi
 
 // ─── POST handler — 4-phase agentic loop ─────────────────────────────────────
 
+/**
+ * Helper: upscale + validate an image URL. Returns the URL if valid, null otherwise.
+ */
+async function tryImage(imgUrl: string): Promise<string | null> {
+  const upscaled = upscaleImageUrl(imgUrl);
+  if (await validateImageUrl(upscaled)) return upscaled;
+  // If upscaling changed the URL and failed, try the original
+  if (upscaled !== imgUrl && await validateImageUrl(imgUrl)) return imgUrl;
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { url, thumbnail_url } = await req.json();
@@ -208,20 +241,20 @@ export async function POST(req: NextRequest) {
     const candidates = html ? extractProductImageCandidates(html, isSpa) : [];
     const best = candidates[0];
 
-    // High-confidence static hit — return immediately without calling Gemini
+    // High-confidence static hit — validate before returning
     if (best && best.score >= 80) {
-      return NextResponse.json({ ok: true, image_url: upscaleImageUrl(best.url) });
+      const valid = await tryImage(best.url);
+      if (valid) return NextResponse.json({ ok: true, image_url: valid });
+      // Score was high but image invalid (logo/broken) — fall through to Gemini
     }
 
     // ── Phase B: Gemini agent ─────────────────────────────────────────────────
-    // Gemini classifies the page and extracts the product image (or finds the PDP link)
     if (html) {
       try {
         const geminiResult = await extractProductImageFromHtml(url, html);
 
         if (geminiResult) {
           if (geminiResult.page_type === "listing" && geminiResult.product_url) {
-            // Navigate to the actual product detail page
             try {
               const pdpHtml = await fetchHtml(geminiResult.product_url, 3000);
               const pdpResult = await extractProductImageFromHtml(
@@ -229,17 +262,21 @@ export async function POST(req: NextRequest) {
                 pdpHtml,
               );
               if (pdpResult?.found && pdpResult.image_url) {
-                return NextResponse.json({
-                  ok: true,
-                  image_url: upscaleImageUrl(pdpResult.image_url),
-                  resolved_url: geminiResult.product_url,
-                });
+                const valid = await tryImage(pdpResult.image_url);
+                if (valid) {
+                  return NextResponse.json({
+                    ok: true,
+                    image_url: valid,
+                    resolved_url: geminiResult.product_url,
+                  });
+                }
               }
             } catch {
               // PDP fetch failed — fall through
             }
           } else if (geminiResult.found && geminiResult.image_url) {
-            return NextResponse.json({ ok: true, image_url: upscaleImageUrl(geminiResult.image_url) });
+            const valid = await tryImage(geminiResult.image_url);
+            if (valid) return NextResponse.json({ ok: true, image_url: valid });
           }
         }
       } catch (err) {
@@ -248,20 +285,24 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Phase C: Brave thumbnail CDN trust check ──────────────────────────────
-    // Thumbnails from known fashion CDNs are reliable product photos
     if (thumbnail_url && isTrustedCdnUrl(thumbnail_url)) {
-      return NextResponse.json({ ok: true, image_url: upscaleImageUrl(thumbnail_url) });
+      const valid = await tryImage(thumbnail_url);
+      if (valid) return NextResponse.json({ ok: true, image_url: valid });
     }
 
-    // ── Phase D: Best available fallback ──────────────────────────────────────
-    if (best) {
-      return NextResponse.json({ ok: true, image_url: upscaleImageUrl(best.url) });
+    // ── Phase D: Walk remaining candidates, validate each ────────────────────
+    for (const candidate of candidates.slice(0, 5)) {
+      const valid = await tryImage(candidate.url);
+      if (valid) return NextResponse.json({ ok: true, image_url: valid });
     }
+
+    // ── Phase E: Thumbnail fallback ──────────────────────────────────────────
     if (thumbnail_url) {
-      return NextResponse.json({ ok: true, image_url: upscaleImageUrl(thumbnail_url) });
+      const valid = await tryImage(thumbnail_url);
+      if (valid) return NextResponse.json({ ok: true, image_url: valid });
     }
 
-    return NextResponse.json({ ok: false, error: "No product image found" }, { status: 404 });
+    return NextResponse.json({ ok: false, error: "No valid product image found" }, { status: 404 });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : "Internal error";
     console.error("[screenshot]", msg);
