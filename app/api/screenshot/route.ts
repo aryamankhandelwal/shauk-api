@@ -1,54 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export const maxDuration = 10;
 
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
-
-// ─── Gemini Vision image classification ──────────────────────────────────────
-
-interface ClassifyResult {
-  isProduct: boolean;
-  confidence: number;
-}
-
-/**
- * Classify image using Gemini Vision to verify it is a product/clothing photo.
- * Returns { isProduct, confidence }. Never throws — returns { isProduct: true }
- * if Gemini is unavailable, so the pipeline is never blocked.
- */
-async function classifyImage(imageBase64: string): Promise<ClassifyResult> {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (!geminiKey) return { isProduct: true, confidence: 0.5 };
-
-  try {
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
-
-    const result = await Promise.race([
-      model.generateContent([
-        {
-          inlineData: {
-            mimeType: "image/jpeg",
-            data: imageBase64,
-          },
-        },
-        "Is this image a product photo of a clothing or fashion item, or a model wearing clothing? Answer ONLY 'yes' or 'no'.",
-      ]),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Gemini timeout")), 4000)
-      ),
-    ]);
-
-    const text = result.response.text().trim().toLowerCase();
-    const isProduct = text.startsWith("yes");
-    return { isProduct, confidence: isProduct ? 0.8 : 0.2 };
-  } catch {
-    // Gemini unavailable or rate-limited — pass through
-    return { isProduct: true, confidence: 0.5 };
-  }
-}
 
 // Fetch the best product image from a page and return it as base64.
 // Priority: schema.org Product JSON-LD → og:image → twitter:image → body <img> tags
