@@ -1,16 +1,25 @@
 export type Gender = "male" | "female" | "kids" | "unknown";
 
-const KIDS_KEYWORDS = [
-  "kids", "kid", "boy", "boys", "girl", "girls",
-  "baby", "infant", "toddler",
+// Use regex patterns with word boundaries so "men" never matches inside "women"
+const KIDS_PATTERNS = [
+  /\bkids?\b/, /\bboys?\b/, /\bgirls?\b/, /\bbaby\b/, /\binfant\b/, /\btoddler\b/,
 ];
-const MALE_KEYWORDS = [
-  "men", "mens", "men's", "kurta for men", "sherwani",
+const MALE_PATTERNS = [
+  /\bmen\b/, /\bmens\b/, /\bmen's\b/, /\bsherwani\b/, /\bkurta\s+for\s+men\b/,
+  /\bpathani\b/, /\bnehru\b/, /\bbandhgala\b/,
 ];
-const FEMALE_KEYWORDS = [
-  "women", "womens", "women's", "kurti", "lehenga", "saree",
+const FEMALE_PATTERNS = [
+  /\bwomen\b/, /\bwomens\b/, /\bwomen's\b/, /\bkurti\b/, /\blehenga\b/,
+  /\bsaree\b/, /\bsari\b/, /\banarkali\b/, /\bsalwar\b/, /\bdupatta\b/,
 ];
-const BLOCK_URL_SEGMENTS = ["/kids", "/boys", "/girls"];
+
+const KIDS_URL_SEGMENTS = ["/kids", "/boys", "/girls", "/baby", "/infant"];
+const MALE_URL_SEGMENTS = ["/men/", "/men-", "-men/", "/menswear", "/mens/"];
+const FEMALE_URL_SEGMENTS = ["/women/", "/women-", "-women/", "/womenswear", "/womens/"];
+
+function matchesAny(text: string, patterns: RegExp[]): boolean {
+  return patterns.some((p) => p.test(text));
+}
 
 export function classifyProduct(product: {
   title?: string;
@@ -19,23 +28,27 @@ export function classifyProduct(product: {
   const url = (product.product_url || "").toLowerCase();
   const text = ((product.title || "") + " " + url).toLowerCase();
 
-  // Block by URL segment first
-  if (BLOCK_URL_SEGMENTS.some((seg) => url.includes(seg))) {
+  // Kids: URL segment check first, then keyword
+  if (KIDS_URL_SEGMENTS.some((seg) => url.includes(seg))) {
+    return { gender: "kids", exclude: true };
+  }
+  if (matchesAny(text, KIDS_PATTERNS)) {
     return { gender: "kids", exclude: true };
   }
 
-  // Hard block: kids keywords
-  if (KIDS_KEYWORDS.some((k) => text.includes(k))) {
-    return { gender: "kids", exclude: true };
+  // URL-based gender takes priority over title keywords
+  if (FEMALE_URL_SEGMENTS.some((seg) => url.includes(seg))) {
+    return { gender: "female", exclude: false };
   }
-
-  // Male signals
-  if (MALE_KEYWORDS.some((k) => text.includes(k))) {
+  if (MALE_URL_SEGMENTS.some((seg) => url.includes(seg))) {
     return { gender: "male", exclude: false };
   }
 
-  // Female signals
-  if (FEMALE_KEYWORDS.some((k) => text.includes(k))) {
+  // Title keyword fallback (word-boundary safe)
+  if (matchesAny(text, MALE_PATTERNS)) {
+    return { gender: "male", exclude: false };
+  }
+  if (matchesAny(text, FEMALE_PATTERNS)) {
     return { gender: "female", exclude: false };
   }
 
