@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
+import { classifyProduct } from "../lib/classifier";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -68,6 +69,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const occasion: string = body.occasion ?? "";
+  const userGender: string | undefined = body.gender;
 
   if (!occasion) {
     return NextResponse.json(
@@ -80,7 +82,7 @@ export async function POST(req: NextRequest) {
     .from("products")
     .select("*")
     .ilike("title", `%${occasion}%`)
-    .limit(20);
+    .limit(40);
 
   if (error) {
     return NextResponse.json(
@@ -89,6 +91,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const cards = (data as Product[]).map(toOutfitCard);
+  const filtered = (data as Product[]).filter((p) => {
+    const { gender, exclude } = classifyProduct(p);
+    if (exclude) return false;
+    if (userGender === "male") return gender === "male" || gender === "unknown";
+    if (userGender === "female") return gender === "female" || gender === "unknown";
+    return true;
+  });
+
+  const cards = filtered.map(toOutfitCard);
   return NextResponse.json({ ok: true, cards });
 }
