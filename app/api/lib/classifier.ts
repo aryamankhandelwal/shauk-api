@@ -14,6 +14,7 @@ const FEMALE_PATTERNS = [
   /\bwomen\b/, /\bwomens\b/, /\bwomen's\b/, /\bkurti\b/, /\blehenga\b/,
   /\bsaree\b/, /\bsari\b/, /\banarkali\b/, /\bsalwar\b/, /\bdupatta\b/,
   /\bstraight\s+kurta\b/, /\bpalazzo\b/, /\ba[\s-]line\b/, /\bpeplum\b/, /\bkurta\s+pant\b/,
+  /\bkurta\s+set\b/, /\bsharara\b/, /\bgharara\b/,
 ];
 
 const KIDS_URL_SEGMENTS = ["/kids", "/boys", "/girls", "/baby", "/infant"];
