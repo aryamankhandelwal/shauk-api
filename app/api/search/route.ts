@@ -22,6 +22,7 @@ interface Product {
   fabric: string | null;
   embellishments: string[];
   currency: string | null;
+  available_sizes: string[] | null;
 }
 
 /** Map a Supabase product row into the OutfitCard shape the iOS app expects. */
@@ -43,10 +44,100 @@ function toOutfitCard(p: Product) {
     color: p.color ?? null,
     fabric: p.fabric ?? null,
     embellishments: p.embellishments ?? [],
+    available_sizes: p.available_sizes ?? [],
     thumbnail_url: p.image_url,
     image_url: p.image_url,
     sourceURL: p.product_url,
   };
+}
+
+// ── Deduplication helpers ─────────────────────────────────────────────
+
+function normalizeImageUrl(url: string): string {
+  let n = url.split("?")[0];
+  n = n.replace(
+    /_([\d]+x[\d]*|x[\d]+|grande|large|medium|small|compact|master|thumb|icon|pico|nano)(?=\.\w{3,4}$)/i,
+    ""
+  );
+  n = n.replace(/\/[hwq]-\d+(?:,[hwq]-\d+)*\//g, "/");
+  return n.toLowerCase();
+}
+
+function completenessScore(p: Product): number {
+  return (p.garment_type != null ? 1 : 0) +
+         (p.color        != null ? 1 : 0) +
+         (p.fabric       != null ? 1 : 0);
+}
+function isSetProduct(p: Product): boolean {
+  return /\b(pyjama|churidar|dupatta|set)\b| and /i.test(p.title);
+}
+function pickWinner(a: Product, b: Product): Product {
+  const sa = completenessScore(a), sb = completenessScore(b);
+  if (sa !== sb) return sa > sb ? a : b;
+  if (isSetProduct(a) && !isSetProduct(b)) return a;
+  if (isSetProduct(b) && !isSetProduct(a)) return b;
+  return (a.price ?? Infinity) <= (b.price ?? Infinity) ? a : b;
+}
+
+/** 1a — dedupe by normalized image_url (same photo, different SKU) */
+function deduplicateByImage(products: Product[]): Product[] {
+  const seen = new Map<string, Product>();
+  for (const p of products) {
+    if (!p.image_url) { seen.set(p.id, p); continue; }
+    const key = normalizeImageUrl(p.image_url);
+    const existing = seen.get(key);
+    seen.set(key, existing ? pickWinner(existing, p) : p);
+  }
+  return Array.from(seen.values());
+}
+
+const STOP_WORDS = new Set([
+  "and","the","a","an","with","for","in","of","by","set","or","at","to","from",
+]);
+function wordSet(title: string): Set<string> {
+  return new Set(
+    title.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+         .filter(w => w.length > 1 && !STOP_WORDS.has(w))
+  );
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size && !b.size) return 1;
+  let n = 0; for (const w of a) if (b.has(w)) n++;
+  return n / (a.size + b.size - n);
+}
+
+/** 1b — dedupe by title Jaccard within same source (variants from same vendor) */
+function deduplicateByTitle(products: Product[]): Product[] {
+  const bySource = new Map<string, Product[]>();
+  for (const p of products) {
+    const g = bySource.get(p.source) ?? [];
+    g.push(p); bySource.set(p.source, g);
+  }
+  const result: Product[] = [];
+  for (const [, group] of bySource) {
+    const ws = group.map(p => wordSet(p.title));
+    const eliminated = new Set<number>();
+    for (let i = 0; i < group.length; i++) {
+      if (eliminated.has(i)) continue;
+      for (let j = i + 1; j < group.length; j++) {
+        if (eliminated.has(j)) continue;
+        // Price guard: skip if prices differ by >40% (different products, not variants)
+        const pi = group[i].price, pj = group[j].price;
+        if (pi != null && pj != null && Math.max(pi, pj) / Math.min(pi, pj) > 1.4) continue;
+        if (jaccard(ws[i], ws[j]) >= 0.65) {
+          const winner = pickWinner(group[i], group[j]);
+          if (winner === group[j]) { group[i] = group[j]; ws[i] = ws[j]; }
+          eliminated.add(j);
+        }
+      }
+      result.push(group[i]);
+    }
+  }
+  return result;
+}
+
+function deduplicateProducts(products: Product[]): Product[] {
+  return deduplicateByTitle(deduplicateByImage(products));
 }
 
 // GET /api/search?q=<query> — raw product data
@@ -146,8 +237,11 @@ export async function POST(req: NextRequest) {
     const { gender: classified, exclude } = classifyProduct(p);
     if (exclude) return false;
 
-    const resolvedGender: string =
-      classified !== "unknown" ? classified : (p.gender ?? "unknown");
+    // DB gender is authoritative (set by the scraper for known-gender sources,
+    // e.g. sojanya/tasva/jade_blue = male). Fall back to runtime classifier only
+    // when the DB has no opinion, then to "unknown" as last resort.
+    const dbGender = (p.gender && p.gender !== "unknown") ? p.gender : null;
+    const resolvedGender: string = dbGender ?? (classified !== "unknown" ? classified : "unknown");
 
     if (effectiveUserGender === "male")
       return resolvedGender === "male" || resolvedGender === "unisex" || resolvedGender === "unknown";
@@ -156,6 +250,7 @@ export async function POST(req: NextRequest) {
     return true;
   });
 
-  const cards = filtered.map(toOutfitCard);
+  const deduped = deduplicateProducts(filtered);
+  const cards = deduped.map(toOutfitCard);
   return NextResponse.json({ ok: true, cards, _parsed: parsed });
 }

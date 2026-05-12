@@ -15,6 +15,9 @@ const FEMALE_PATTERNS = [
   /\bsaree\b/, /\bsari\b/, /\banarkali\b/, /\bsalwar\b/, /\bdupatta\b/,
   /\bstraight\s+kurta\b/, /\bpalazzo\b/, /\ba[\s-]line\b/, /\bpeplum\b/, /\bkurta\s+pant\b/,
   /\bkurta\s+set\b/, /\bsharara\b/, /\bgharara\b/,
+  // "kurta" alone (without explicit male markers) is female on Indian fashion sites;
+  // male patterns (men, pyjama, churidar, sherwani, etc.) are checked first so male kurtas are safe
+  /\bkurta\b/,
 ];
 
 const KIDS_URL_SEGMENTS = ["/kids", "/boys", "/girls", "/baby", "/infant"];
