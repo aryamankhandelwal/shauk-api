@@ -28,9 +28,16 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(text));
 }
 
+// Garment types that are inherently gendered
+const MALE_GARMENT_TYPES = new Set(["sherwani", "bandhgala", "pathani"]);
+const FEMALE_GARMENT_TYPES = new Set([
+  "lehenga", "saree", "anarkali", "sharara", "gharara", "dupatta",
+]);
+
 export function classifyProduct(product: {
   title?: string;
   product_url?: string;
+  garment_type?: string | null;
 }): { gender: Gender; exclude: boolean } {
   const url = (product.product_url || "").toLowerCase();
   const text = ((product.title || "") + " " + url).toLowerCase();
@@ -49,6 +56,15 @@ export function classifyProduct(product: {
   }
   if (MALE_URL_SEGMENTS.some((seg) => url.includes(seg))) {
     return { gender: "male", exclude: false };
+  }
+
+  // Garment-type based gender (catches products with vague titles)
+  const gt = (product.garment_type || "").toLowerCase();
+  if (MALE_GARMENT_TYPES.has(gt)) {
+    return { gender: "male", exclude: false };
+  }
+  if (FEMALE_GARMENT_TYPES.has(gt)) {
+    return { gender: "female", exclude: false };
   }
 
   // Title keyword fallback (word-boundary safe)

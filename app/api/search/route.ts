@@ -25,11 +25,14 @@ interface Product {
   available_sizes: string[] | null;
 }
 
+// Sources where the title belongs to a third-party seller — use the platform name as brand
+const MARKETPLACE_SOURCES = new Set(["nykaa", "ajio", "tatacliq", "myntra", "azafashions", "kalkifashion", "fabindia"]);
+
 /** Map a Supabase product row into the OutfitCard shape the iOS app expects. */
 function toOutfitCard(p: Product) {
-  const parts = p.title.split(" ");
-  const brand = parts[0] ?? p.source;
-  const name = parts.slice(1).join(" ") || p.title;
+  const isMarketplace = MARKETPLACE_SOURCES.has(p.source);
+  const brand = isMarketplace ? p.source : (p.title.split(" ")[0] ?? p.source);
+  const name = isMarketplace ? p.title : (p.title.split(" ").slice(1).join(" ") || p.title);
 
   return {
     id: p.id,
@@ -250,7 +253,26 @@ export async function POST(req: NextRequest) {
     return true;
   });
 
-  const deduped = deduplicateProducts(filtered);
-  const cards = deduped.map(toOutfitCard);
+  const deduped = deduplicateProducts(filtered).sort(
+    (a, b) => completenessScore(b) - completenessScore(a)
+  );
+
+  // ── Size filter (post-fetch) ──────────────────────────────────────
+  const userSize = (body.top_size || body.bottom_size || "").toUpperCase();
+  const sized = userSize
+    ? deduped
+        .filter((p) =>
+          !p.available_sizes?.length ||
+          p.available_sizes.map((s: string) => s.toUpperCase()).includes(userSize)
+        )
+        .sort((a, b) => {
+          // Products with the user's size explicitly listed rank first
+          const aHas = a.available_sizes?.map((s: string) => s.toUpperCase()).includes(userSize) ? 0 : 1;
+          const bHas = b.available_sizes?.map((s: string) => s.toUpperCase()).includes(userSize) ? 0 : 1;
+          return aHas - bHas;
+        })
+    : deduped;
+
+  const cards = sized.map(toOutfitCard);
   return NextResponse.json({ ok: true, cards, _parsed: parsed });
 }
