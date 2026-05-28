@@ -31,8 +31,10 @@ const MARKETPLACE_SOURCES = new Set(["nykaa", "ajio", "tatacliq", "myntra", "aza
 /** Map a Supabase product row into the OutfitCard shape the iOS app expects. */
 function toOutfitCard(p: Product) {
   const isMarketplace = MARKETPLACE_SOURCES.has(p.source);
-  const brand = isMarketplace ? p.source : (p.title.split(" ")[0] ?? p.source);
-  const name = isMarketplace ? p.title : (p.title.split(" ").slice(1).join(" ") || p.title);
+  // Non-marketplace sources are single-brand direct scrapers — use the source as brand.
+  // Avoids showing garment descriptors ("Cream", "Embroidered") as the brand name.
+  const brand = isMarketplace ? p.source : p.source.replace(/_/g, " ");
+  const name = p.title;
 
   return {
     id: p.id,
