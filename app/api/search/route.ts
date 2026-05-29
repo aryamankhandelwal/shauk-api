@@ -100,6 +100,27 @@ function rankScore(p: Product): number {
          (completenessScore(p) * 3) +
          (embellishmentScore(p) * 2);
 }
+
+/**
+ * Bonus for products where the searched terms appear prominently in the title.
+ * A product titled "Mirror Work Lehenga" should outrank one tagged with mirror work
+ * but titled "Floral Embroidered Saree with Mirror Work Border".
+ */
+function titleRelevanceBonus(p: Product, terms: string[]): number {
+  if (!terms.length) return 0;
+  const title = p.title.toLowerCase();
+  let bonus = 0;
+  for (const term of terms) {
+    const t = term.toLowerCase();
+    const tNoSpace = t.replace(/\s+/g, "");
+    const idx = title.indexOf(t) !== -1 ? title.indexOf(t) : title.indexOf(tNoSpace);
+    if (idx !== -1) {
+      bonus += 3;           // term appears in title at all
+      if (idx < 35) bonus += 2; // appears early → primary descriptor, not a footnote
+    }
+  }
+  return Math.min(bonus, 6); // cap so it doesn't fully override source tier
+}
 function isSetProduct(p: Product): boolean {
   return /\b(pyjama|churidar|dupatta|set)\b| and /i.test(p.title);
 }
@@ -411,8 +432,12 @@ export async function POST(req: NextRequest) {
     return true;
   });
 
+  // Terms the user explicitly searched for — used to boost title-prominent matches
+  const searchTerms = [...parsed.embellishments, ...parsed.keywords];
   const deduped = deduplicateProducts(filtered).sort(
-    (a, b) => rankScore(b) - rankScore(a)
+    (a, b) =>
+      (rankScore(b) + titleRelevanceBonus(b, searchTerms)) -
+      (rankScore(a) + titleRelevanceBonus(a, searchTerms))
   );
 
   // ── Size filter (post-fetch) ──────────────────────────────────────
