@@ -118,6 +118,109 @@ CRITICAL RULES:
     - "striped", "stripes", "stripe" → ["striped"]
     Style terms NOT in the above list (e.g. "bandhani", "banarasi", "ikat", "kalamkari", "patola", "chanderi", "mul mul") are NOT in embellishments — put them in keywords[] instead so they match product titles via text search.`;
 
+// ── Follow-up questions ──────────────────────────────────────────────
+
+export interface FollowUpQuestion {
+  id: string          // "budget" | "role" | "color" | "style" | "fabric"
+  question: string
+  suggestions: string[] // always exactly 3
+}
+
+export interface SearchInitResult {
+  questions: FollowUpQuestion[]
+  parsed: ParsedQuery
+}
+
+const INIT_PROMPT_TEMPLATE = (occasion: string, gender?: string) => `Analyze this Indian ethnic wear search and return TWO things in one JSON response.
+
+Search: "${occasion}"
+${gender ? `User gender: ${gender}` : ""}
+
+Return a JSON object with exactly these two top-level fields:
+{
+  "questions": [],
+  "parsed": {}
+}
+
+━━━ QUESTIONS RULES ━━━
+Generate 0–3 follow-up questions that would most improve search results.
+Only ask about things NOT already specified in the search query.
+If the search is already highly specific (garment + color + price all clear), return [].
+Each question has exactly 3 suggestions. Order by impact (most important first).
+
+Available question types (use these id values exactly):
+- id "budget"  → suggestions: ["Under ₹5,000", "₹5,000–₹20,000", "₹20,000+"]
+- id "role"    → for weddings/events, e.g. ["I'm the bride", "I'm a guest", "Part of the wedding party"]
+- id "color"   → ["Open to anything", "Pastels & soft tones", "Bold & vibrant"]
+- id "style"   → ["Traditional & classic", "Contemporary & fashion-forward", "Fusion & experimental"]
+- id "fabric"  → ["Light & flowy", "Rich & structured", "Comfortable & breathable"]
+
+━━━ PARSED RULES ━━━
+"parsed" must be an object with:
+{
+  "garment_types": [],   // subset of: [${VALID_GARMENTS.join(", ")}]
+  "colors": [],          // subset of: [${VALID_COLORS.join(", ")}]
+  "max_price": null,     // number in INR or null
+  "min_price": null,     // number in INR or null
+  "fabrics": [],
+  "embellishments": [],  // subset of: [${VALID_EMBELLISHMENTS.join(", ")}]
+  "keywords": [],
+  "gender_hint": null
+}
+
+Apply ALL cultural and styling rules:
+- wedding guest (female) → ["anarkali", "lehenga", "salwar"] NOT saree
+- bride → ["lehenga"] only; sangeet → ["lehenga", "sharara", "gharara", "anarkali"]
+- reception → ["lehenga", "gown", "saree"]; saree only for reception/puja/office/explicit
+- Color families: "pink" → ["pink","blush","rose gold","dusty rose","mauve","peach","coral","fuchsia","magenta"], etc.
+- Embellishment aliases: "mirrorwork"→["mirror work"], "kundan"→["stone work"], "sequin"→["sequins"], etc.
+- Add quality fabrics for the occasion (wedding → ["silk","georgette","velvet","chiffon"])
+- Price clues: "under 10k"→max_price:10000, "budget"→max_price:5000, "luxury"→min_price:20000`;
+
+export async function generateSearchInit(occasion: string, gender?: string): Promise<SearchInitResult> {
+  try {
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+      systemInstruction: SYSTEM_PROMPT,
+    });
+
+    const result = await model.generateContent(INIT_PROMPT_TEMPLATE(occasion, gender));
+    const text = result.response.text().trim();
+    const json = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
+    const raw = JSON.parse(json);
+
+    // Sanitise parsed
+    const rp = raw.parsed ?? {};
+    const sanitisedParsed: ParsedQuery = {
+      garment_types: (rp.garment_types ?? []).filter((g: string) => VALID_GARMENTS.includes(g)),
+      colors: (rp.colors ?? []).filter((c: string) => VALID_COLORS.includes(c)),
+      max_price: typeof rp.max_price === "number" ? rp.max_price : null,
+      min_price: typeof rp.min_price === "number" ? rp.min_price : null,
+      fabrics: Array.isArray(rp.fabrics) ? rp.fabrics : [],
+      embellishments: (rp.embellishments ?? []).filter((e: string) => VALID_EMBELLISHMENTS.includes(e)),
+      keywords: Array.isArray(rp.keywords) ? rp.keywords : [],
+      gender_hint: rp.gender_hint === "male" || rp.gender_hint === "female" ? rp.gender_hint : null,
+    };
+
+    // Sanitise questions — max 3, each with id/question/suggestions
+    const rawQs: unknown[] = Array.isArray(raw.questions) ? raw.questions : [];
+    const sanitisedQuestions: FollowUpQuestion[] = rawQs
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .filter((q: any) => q && typeof q.id === "string" && typeof q.question === "string" && Array.isArray(q.suggestions))
+      .slice(0, 3)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((q: any) => ({
+        id: String(q.id),
+        question: String(q.question),
+        suggestions: (q.suggestions as unknown[]).slice(0, 3).map(String),
+      }));
+
+    return { questions: sanitisedQuestions, parsed: sanitisedParsed };
+  } catch {
+    return { questions: [], parsed: { ...EMPTY_PARSED, keywords: [occasion] } };
+  }
+}
+
 const EMPTY_PARSED: ParsedQuery = {
   garment_types: [],
   colors: [],

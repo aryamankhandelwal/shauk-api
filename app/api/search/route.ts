@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { classifyProduct } from "../lib/classifier";
-import { parseSearchQuery } from "../lib/gemini";
+import { parseSearchQuery, ParsedQuery } from "../lib/gemini";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -145,6 +145,56 @@ function deduplicateProducts(products: Product[]): Product[] {
   return deduplicateByTitle(deduplicateByImage(products));
 }
 
+// ── Answer merger (deterministic — no Gemini call needed for known suggestions) ──
+
+const KNOWN_SUGGESTIONS = new Set([
+  "Under ₹5,000", "₹5,000–₹20,000", "₹20,000+",
+  "I'm the bride", "I'm a guest", "Part of the wedding party",
+  "Open to anything", "Pastels & soft tones", "Bold & vibrant", "Neutrals & nudes",
+  "Traditional & classic", "Contemporary & fashion-forward", "Fusion & experimental",
+  "Light & flowy", "Rich & structured", "Comfortable & breathable",
+]);
+
+function dedup<T>(arr: T[]): T[] { return [...new Set(arr)]; }
+
+function mergeAnswers(
+  base: ParsedQuery,
+  answers: Array<{ question: string; answer: string }>
+): ParsedQuery {
+  let p: ParsedQuery = { ...base, colors: [...base.colors], fabrics: [...base.fabrics] };
+
+  for (const { answer } of answers) {
+    // Budget
+    if (answer === "Under ₹5,000")          { p = { ...p, max_price: 5000 }; continue; }
+    if (answer === "₹5,000–₹20,000")        { p = { ...p, min_price: 5000, max_price: 20000 }; continue; }
+    if (answer === "₹20,000+")              { p = { ...p, min_price: 20000 }; continue; }
+    // Role
+    if (answer === "I'm the bride")         { p = { ...p, garment_types: ["lehenga"] }; continue; }
+    if (answer === "I'm a guest")           { p = { ...p, garment_types: ["anarkali", "lehenga", "salwar"] }; continue; }
+    if (answer === "Part of the wedding party") { p = { ...p, garment_types: ["anarkali", "sharara", "salwar"] }; continue; }
+    // Color families
+    if (answer === "Pastels & soft tones")  {
+      p = { ...p, colors: dedup([...p.colors, "blush", "lavender", "mint", "ivory", "peach", "powder blue", "champagne", "lilac"]) };
+      continue;
+    }
+    if (answer === "Bold & vibrant")        {
+      p = { ...p, colors: dedup([...p.colors, "red", "maroon", "fuchsia", "cobalt", "royal blue", "saffron", "gold", "magenta"]) };
+      continue;
+    }
+    if (answer === "Neutrals & nudes")      {
+      p = { ...p, colors: dedup([...p.colors, "nude", "beige", "ivory", "cream", "taupe", "camel", "fawn"]) };
+      continue;
+    }
+    // Style / fabric
+    if (answer === "Traditional & classic") { p = { ...p, fabrics: dedup([...p.fabrics, "silk", "velvet", "brocade"]) }; continue; }
+    if (answer === "Contemporary & fashion-forward") { p = { ...p, fabrics: dedup([...p.fabrics, "georgette", "crepe", "organza"]) }; continue; }
+    if (answer === "Light & flowy")         { p = { ...p, fabrics: dedup([...p.fabrics, "georgette", "chiffon", "crepe"]) }; continue; }
+    if (answer === "Rich & structured")     { p = { ...p, fabrics: dedup([...p.fabrics, "silk", "velvet", "brocade"]) }; continue; }
+    // "Open to anything", "Comfortable & breathable", "Fusion & experimental" → no filter change
+  }
+  return p;
+}
+
 // GET /api/search?q=<query> — raw product data
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q");
@@ -184,6 +234,9 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const sessionToken: string | undefined = body.sessionToken;
+  const followUpAnswers: Array<{ question: string; answer: string }> = body.followUpAnswers ?? [];
+
   // ── Test fixture short-circuit (no Gemini call) ───────────────────
   if (occasion.trim().toLowerCase() === "test prompt") {
     const { data: testData, error: testError } = await supabase
@@ -202,8 +255,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, cards, _parsed: { _test: true } });
   }
 
-  // Parse occasion into structured filters via Gemini (pass gender so it can tailor garment suggestions)
-  const parsed = await parseSearchQuery(occasion, userGender);
+  // ── Resolve ParsedQuery — use sessionToken (no Gemini) or fall back to Gemini ──
+  let parsed: ParsedQuery;
+  if (sessionToken) {
+    try {
+      const base = JSON.parse(Buffer.from(sessionToken, "base64").toString("utf8")) as ParsedQuery;
+      // If any answer is custom (not in our known suggestion set), re-parse with Gemini
+      const hasCustom = followUpAnswers.some(a => a.answer && !KNOWN_SUGGESTIONS.has(a.answer) && a.answer !== "Open to anything");
+      if (hasCustom) {
+        const enriched = `${occasion}. ${followUpAnswers.map(a => a.answer).filter(Boolean).join(". ")}.`;
+        parsed = await parseSearchQuery(enriched, userGender);
+      } else {
+        parsed = mergeAnswers(base, followUpAnswers);
+      }
+    } catch {
+      // Token corrupt — fall back to Gemini
+      parsed = await parseSearchQuery(occasion, userGender);
+    }
+  } else {
+    // Legacy path (no token) — enrich occasion with any answers and parse
+    const enriched = followUpAnswers.length > 0
+      ? `${occasion}. ${followUpAnswers.map(a => a.answer).join(". ")}.`
+      : occasion;
+    parsed = await parseSearchQuery(enriched, userGender);
+  }
 
   // Determine effective gender — prefer explicit user profile gender over hint
   const effectiveUserGender = userGender ?? parsed.gender_hint ?? undefined;
