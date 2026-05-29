@@ -102,6 +102,32 @@ function rankScore(p: Product): number {
 }
 
 /**
+ * Regional/craft vocabulary aliases for embellishment search terms.
+ * Designer brands often use craft-specific names (shisha, abla, chikankari) instead
+ * of the generic terms stored in the DB. Expanding search terms with these aliases
+ * lets the title relevance bonus fire even for products using craft vocabulary.
+ */
+const EMBELLISHMENT_ALIASES: Record<string, string[]> = {
+  "mirror work":  ["shisha", "abla", "sitara", "mirrorwork", "shishay"],
+  "embroidery":   ["chikankari", "chikan", "lucknowi", "kantha", "aari", "nakshi"],
+  "thread work":  ["phulkari", "kantha", "kasuti", "mukaish", "badla", "kamdani"],
+  "stone work":   ["kundan", "polki", "meenakari"],
+  "block print":  ["ajrakh", "dabu", "bagru"],
+  "zardozi":      ["zardosi", "zari work"],
+  "gota patti":   ["gota work", "gotta patti"],
+  "sequins":      ["sequin", "glitter"],
+};
+
+function expandSearchTerms(terms: string[]): string[] {
+  const expanded = [...terms];
+  for (const term of terms) {
+    const aliases = EMBELLISHMENT_ALIASES[term.toLowerCase()] ?? [];
+    expanded.push(...aliases);
+  }
+  return [...new Set(expanded)];
+}
+
+/**
  * Bonus for products where the searched terms appear prominently in the title.
  * Distinguishes primary features ("Mirror Work Lehenga") from accents
  * ("Floral Suit Set With Mirror Work") and penalises the latter.
@@ -449,7 +475,8 @@ export async function POST(req: NextRequest) {
   };
 
   const filtered = (data as Product[]).filter(passesGender);
-  const searchTerms = [...parsed.embellishments, ...parsed.keywords];
+  // Expand with craft/regional aliases so "mirror work" also boosts titles saying "shisha"
+  const searchTerms = expandSearchTerms([...parsed.embellishments, ...parsed.keywords]);
   const sortByRelevance = (a: Product, b: Product) =>
     (rankScore(b) + titleRelevanceBonus(b, searchTerms)) -
     (rankScore(a) + titleRelevanceBonus(a, searchTerms));
