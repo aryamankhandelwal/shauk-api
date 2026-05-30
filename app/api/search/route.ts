@@ -581,6 +581,16 @@ export async function POST(req: NextRequest) {
         })
     : deduped;
 
-  const cards = sized.map(toOutfitCard);
-  return NextResponse.json({ ok: true, cards, _parsed: parsed });
+  const allCards = sized.map(toOutfitCard);
+
+  // Optional pagination — iOS can request a slice to show first cards sooner.
+  // If omitted, the full list is returned (backwards-compatible).
+  const limit: number | undefined  = typeof body.limit  === "number" ? body.limit  : undefined;
+  const offset: number | undefined = typeof body.offset === "number" ? body.offset : undefined;
+  const cards = (limit != null)
+    ? allCards.slice(offset ?? 0, (offset ?? 0) + limit)
+    : allCards;
+  const total = allCards.length;
+
+  return NextResponse.json({ ok: true, cards, total, _parsed: parsed });
 }
