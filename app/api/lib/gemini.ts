@@ -52,19 +52,19 @@ STYLING PHILOSOPHY:
 - For contemporary/party occasions (cocktail, birthday, modern bride), prefer sequins, crystals, thread work — and fabrics like georgette, organza, crepe.
 - For casual, everyday, office, or puja/temple occasions, leave embellishments EMPTY — these occasions call for clean, understated choices.
 
-AESTHETIC & SETTING VOCABULARY — when the query contains atmosphere or setting words, translate them into colors + fabrics even if no color is explicitly named:
-- "sunset" / "golden hour" / "dusk" → colors: terracotta, rust, coral, amber, saffron, peach, gold, marigold; fabrics: georgette, chiffon, organza (lightweight, outdoor feel); embellishments: keep minimal or floral — avoid heavy zardozi
-- "garden party" / "floral" / "spring" → colors: blush, mint, lavender, sage, peach, ivory; fabrics: organza, chiffon, georgette; embellishments: floral or thread work
-- "beach" / "coastal" / "lake" → colors: aqua, turquoise, sky blue, coral, white, gold; fabrics: chiffon, georgette, linen; embellishments: minimal or printed
-- "monsoon" / "rain" / "grey" → colors: teal, cobalt, petrol (use navy/indigo), sage, grey; fabrics: cotton, khadi, georgette
-- "night" / "evening" / "midnight" / "black tie" / "gala" → colors: black, navy, plum, burgundy, charcoal, silver, gold; fabrics: velvet, brocade, satin; embellishments: zardozi, crystals, sequins
-- "old money" / "quiet luxury" / "understated" / "minimal" → colors: ivory, champagne, camel, taupe, ecru, off-white, cream, beige; fabrics: silk, crepe, linen; embellishments: none or resham only
-- "bohemian" / "earthy" / "rustic" / "folk" → colors: ochre, rust, olive, cream, terracotta, mustard; fabrics: cotton, linen, khadi; embellishments: block print, thread work, mirror work
-- "disco" / "rave" / "neon" / "Y2K" → colors: fuchsia, cobalt, gold, silver, magenta; fabrics: georgette, crepe; embellishments: sequins, crystals
-- "pastel" / "soft" / "dreamy" / "whimsical" → colors: blush, lavender, mint, powder blue, peach, lilac, dusty rose; fabrics: organza, chiffon; embellishments: thread work or embroidery
-- "royal" / "regal" / "majestic" → colors: royal blue, burgundy, maroon, plum, gold, ivory; fabrics: velvet, brocade, silk; embellishments: zardozi, stone work, gota patti
-- "tropical" / "summer" / "vacation" → colors: coral, orange, yellow, turquoise, marigold, aqua; fabrics: chiffon, georgette, linen; embellishments: printed or floral
-- "winter" / "Christmas" / "festive red" → colors: red, maroon, burgundy, wine, gold, green; fabrics: velvet, silk, brocade; embellishments: zardozi, gota patti
+AESTHETIC & SETTING VOCABULARY — when the query contains atmosphere or setting words, translate them into colors + fabrics. Vibe signals are ADDITIVE — they layer on top of occasion logic, never replace it. Only add embellishments from a vibe when that aesthetic is inseparable from a specific craft (see exceptions below).
+- "sunset" / "golden hour" / "dusk" → colors: terracotta, rust, coral, amber, saffron, peach, gold, marigold; fabrics: georgette, chiffon, organza
+- "garden party" / "spring" → colors: blush, mint, lavender, sage, peach, ivory; fabrics: organza, chiffon, georgette
+- "beach" / "coastal" / "lake" / "resort" → colors: aqua, turquoise, sky blue, coral, white, gold; fabrics: chiffon, georgette, linen
+- "monsoon" / "rain" → colors: teal, navy, indigo, sage, cobalt; fabrics: cotton, khadi, georgette
+- "night" / "evening" / "midnight" → colors: black, navy, plum, burgundy, charcoal, silver, gold; fabrics: velvet, brocade, satin
+- "old money" / "quiet luxury" / "understated" / "minimal" → colors: ivory, champagne, camel, taupe, ecru, off-white, cream, beige; fabrics: silk, crepe, linen; [EXCEPTION: set embellishments to none, overrides occasion]
+- "bohemian" / "earthy" / "rustic" / "folk" → colors: ochre, rust, olive, cream, terracotta, mustard; fabrics: cotton, linen, khadi; [EXCEPTION: prefer block print or thread work embellishments]
+- "disco" / "rave" / "Y2K" / "neon" → colors: fuchsia, cobalt, gold, silver, magenta; fabrics: georgette, crepe; [EXCEPTION: prefer sequins or crystals]
+- "pastel" / "soft" / "dreamy" / "whimsical" → colors: blush, lavender, mint, powder blue, peach, lilac, dusty rose; fabrics: organza, chiffon
+- "royal" / "regal" / "majestic" → colors: royal blue, burgundy, maroon, plum, gold, ivory; fabrics: velvet, brocade, silk
+- "tropical" / "summer" / "vacation" → colors: coral, orange, yellow, turquoise, marigold, aqua; fabrics: chiffon, georgette, linen
+- "winter" / "Christmas" / "festive red" → colors: red, maroon, burgundy, wine, gold, green; fabrics: velvet, silk, brocade
 
 Only return valid JSON — no markdown, no explanation.`;
 
@@ -210,7 +210,7 @@ Apply ALL cultural and styling rules:
 - Add quality fabrics for the occasion (wedding → ["silk","georgette","velvet","chiffon"])
 - Embellishments: if the user already named a specific embellishment (mirror work, zardozi, sequins, etc.), use ONLY that — never add more. For celebratory occasions where none is named, add one or two at most: ["embroidery"] for general; ["sequins"] for cocktail/party; ["zardozi"] or ["gota patti"] for high-end bridal. For everyday/office/puja, leave embellishments empty.
 - Price clues: "under 10k"→max_price:10000, "budget"→max_price:5000, "luxury"→min_price:20000
-- Aesthetic/setting words → colors + fabrics even if no color was explicitly stated: "sunset/golden hour"→terracotta+rust+coral+amber+saffron+peach+gold; "garden party/spring"→blush+mint+lavender+peach+ivory; "beach/coastal"→aqua+turquoise+sky blue+coral; "night/midnight/gala"→black+navy+plum+silver+gold+velvet+zardozi; "old money/quiet luxury"→ivory+champagne+camel+silk+no embellishments; "bohemian/earthy"→ochre+rust+olive+block print+thread work; "pastel/dreamy"→blush+lavender+mint+powder blue; "royal/regal"→royal blue+burgundy+gold+velvet+zardozi; "winter/festive red"→red+maroon+burgundy+velvet+zardozi`;
+- Aesthetic/setting words → colors + fabrics (additive, on top of occasion logic): "sunset/golden hour"→terracotta+rust+coral+amber+saffron+peach+gold+georgette/chiffon; "garden party/spring"→blush+mint+lavender+peach+ivory+organza; "beach/coastal"→aqua+turquoise+sky blue+coral+linen; "night/midnight"→black+navy+plum+silver+gold+velvet; "old money/quiet luxury"→ivory+champagne+camel+silk+NO embellishments; "bohemian/earthy"→ochre+rust+olive+cotton/khadi+block print or thread work; "disco/Y2K"→fuchsia+silver+gold+sequins; "pastel/dreamy"→blush+lavender+mint+powder blue+organza; "royal/regal"→royal blue+burgundy+gold+velvet; "winter/festive red"→red+maroon+burgundy+velvet`;
 
 export async function generateSearchInit(occasion: string, gender?: string): Promise<SearchInitResult> {
   try {
