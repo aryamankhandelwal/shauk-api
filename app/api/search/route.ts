@@ -29,21 +29,24 @@ interface Product {
 const MARKETPLACE_SOURCES = new Set(["nykaa", "ajio", "tatacliq", "myntra", "azafashions", "kalkifashion", "fabindia"]);
 
 const SOURCE_TIER: Record<string, number> = {
-  // Tier 3 — Couture / luxury designers
-  manish_malhotra: 3, falguni_shane_peacock: 3, tarun_tahiliani: 3,
-  gaurav_gupta: 3, anamika_khanna: 3, rohit_bal: 3, punit_balana: 3, jayanti_reddy: 3,
-  // Tier 2 — Contemporary / bridge designers
-  anita_dongre: 2, raw_mango: 2, torani: 2, house_of_masaba: 2, payal_singhal: 2,
-  ridhi_mehra: 2, aisha_rao: 2, mishru: 2, sheetal_batra: 2, suruchi_parakh: 2,
-  studio_bagechaa: 2, devnaagri: 2, old_marigold: 2, ritu_kumar: 2,
-  saaksha_kinni: 2, taali: 2, basanti_ke_kapde: 2,
+  // Tier 4 — Couture / luxury designers
+  manish_malhotra: 4, falguni_shane_peacock: 4, tarun_tahiliani: 4,
+  gaurav_gupta: 4, anamika_khanna: 4, rohit_bal: 4, punit_balana: 4, jayanti_reddy: 4,
+  // Tier 3 — Contemporary / bridge designers
+  anita_dongre: 3, raw_mango: 3, torani: 3, house_of_masaba: 3, payal_singhal: 3,
+  ridhi_mehra: 3, aisha_rao: 3, mishru: 3, sheetal_batra: 3, suruchi_parakh: 3,
+  studio_bagechaa: 3, devnaagri: 3, old_marigold: 3, ritu_kumar: 3,
+  saaksha_kinni: 3, taali: 3, basanti_ke_kapde: 3,
+  // Tier 2 — Fashion-forward curators
+  perniaspopupshop: 2, azafashions: 2, ogaan: 2, ensemble: 2, aashni: 2,
   // Tier 1 — Curators / fashion-forward retailers / menswear specialists
-  perniaspopupshop: 1, azafashions: 1, ogaan: 1, ensemble: 1, aashni: 1,
-  the_loom: 1, kalkifashion: 1, manyavar: 1, tasva: 1, jade_blue: 1,
+  the_loom: 1, manyavar: 1, tasva: 1, jade_blue: 1,
   benzer: 1, ahi_clothing: 1, karaj_jaipur: 1, gyans: 1, pratap_sons: 1,
-  ridhiiee_suuri: 1, meena_bazaar: 1, jaipurkurti: 1, tjori: 1, nalli: 1,
+  ridhiiee_suuri: 1, meena_bazaar: 1, tjori: 1, nalli: 1,
   bunaai: 1, indethnic: 1, weaverstory: 1,
+  clothsvilla: 1, suta: 1, fashor: 1, soch: 1, w_for_woman: 1, libas: 1,
   // Tier 0 — mass market (default for anything not listed)
+  kalkifashion: 0, chhabra555: 0, vastramay: 0, vasansi: 0, jaipurkurti: 0,
 };
 function sourceTier(source: string): number { return SOURCE_TIER[source] ?? 0; }
 
@@ -96,7 +99,7 @@ function embellishmentScore(p: Product): number {
   return Math.min((p.embellishments ?? []).length, 3);
 }
 function rankScore(p: Product): number {
-  return (sourceTier(p.source) * 4) +
+  return (sourceTier(p.source) * 1000) +
          (completenessScore(p) * 3) +
          (embellishmentScore(p) * 2);
 }
